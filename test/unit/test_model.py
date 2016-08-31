@@ -3,12 +3,15 @@
 
 import os
 import unittest
+import yaml
 from infrasim import ArgsNotCorrect
 from infrasim import model
 from infrasim import socat
+from infrasim import VM_DEFAULT_CONFIG
 
 
 class qemu_functions(unittest.TestCase):
+
     @classmethod
     def setUpClass(cls):
         os.system("touch test.yml")
@@ -236,18 +239,65 @@ class qemu_functions(unittest.TestCase):
         except:
             assert False
 
+    def test_set_smbios(self):
+        with open("/etc/infrasim/infrasim.yml", "r") as f_yml:
+            compute_info = yaml.load(f_yml)["compute"]
+        compute_info["smbios"] = "/etc/infrasim/test.smbios"
+
+        compute = model.CCompute(compute_info)
+        compute.init()
+        assert compute.get_smbios() == "/etc/infrasim/test.smbios"
+
+    def test_set_smbios_without_workspace(self):
+        with open("/etc/infrasim/infrasim.yml", "r") as f_yml:
+            compute_info = yaml.load(f_yml)["compute"]
+
+        compute = model.CCompute(compute_info)
+        compute.set_type("s2600kp")
+        compute.init()
+        assert compute.get_smbios() == \
+            "/usr/local/etc/infrasim/s2600kp/s2600kp_smbios.bin"
+
+    def test_set_smbios_with_type_and_workspace(self):
+        with open("/etc/infrasim/infrasim.yml", "r") as f_yml:
+            compute_info = yaml.load(f_yml)["compute"]
+        workspace = os.path.join(os.environ["HOME"], ".infrasim", ".test")
+
+        compute = model.CCompute(compute_info)
+        compute.set_type("s2600kp")
+        compute.set_workspace(workspace)
+        compute.init()
+        assert compute.get_smbios() == os.path.join(workspace,
+                                                    "data",
+                                                    "s2600kp_smbios.bin")
+
+
 class bmc_configuration(unittest.TestCase):
 
-    VBMC_CONF = "/etc/infrasim/vbmc.conf"
+    WORKSPACE = "{}/.infrasim/.test".format(os.environ["HOME"])
 
     @classmethod
     def setUpClass(cls):
-        socat.stop_socat()
-        socat.start_socat()
+        with open(VM_DEFAULT_CONFIG, 'r') as f_yml:
+            conf = yaml.load(f_yml)
+        conf["name"] = ".test"
+        with open("test.yml", 'w') as f_yml:
+            yaml.dump(conf, f_yml, default_flow_style=False)
+
+        cls.node = model.CNode(conf)
+        cls.node.set_node_name(".test")
+        cls.node.init_workspace()
+        socat.start_socat("test.yml")
 
     @classmethod
     def tearDownClass(cls):
-        socat.stop_socat()
+        socat.stop_socat("test.yml")
+        with open("test.yml", 'r') as f_yml:
+            conf = yaml.load(f_yml)
+        cls.node = model.CNode(conf)
+        cls.node.init()
+        cls.node.terminate_workspace()
+        os.system("rm test.yml")
 
     def test_set_bmc_type(self):
         bmc = model.CBMC()
@@ -257,7 +307,6 @@ class bmc_configuration(unittest.TestCase):
                           "s2600kp", "s2600tp", "s2600wtt"]:
             bmc.set_type(node_type)
             bmc.init()
-            bmc.precheck()
             cmd = bmc.get_commandline()
             assert "/usr/local/etc/infrasim/{0}/{0}.emu".format(node_type) \
                    in cmd
@@ -269,64 +318,16 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         with open(bmc.get_config_file(), 'r') as fp:
             for line in fp.readlines():
                 if "lan_config_program" in line and "lo" in line:
                     assert True
                     return
-            assert False
-
-    def test_set_invalid_lan_control_script(self):
-        bmc_info = {
-            # Which doesn't exist
-            "lancontrol": "/etc/infrasim/lancontrol"
-        }
-
-        bmc = model.CBMC(bmc_info)
-        bmc.set_type("quanta_d51")
-        bmc.init()
-
-        try:
-            bmc.precheck()
-        except ArgsNotCorrect, e:
-            assert "Lan control script" in str(e)
-        else:
-            assert False
-
-    def test_set_invalid_chassis_control_script(self):
-        bmc_info = {
-            # Which doesn't exist
-            "chassiscontrol": "/etc/infrasim/chassiscontrol"
-        }
-
-        bmc = model.CBMC(bmc_info)
-        bmc.set_type("quanta_d51")
-        bmc.init()
-
-        try:
-            bmc.precheck()
-        except ArgsNotCorrect, e:
-            assert "Chassis control script" in str(e)
-        else:
-            assert False
-
-    def test_set_invalid_startcmd_script(self):
-        bmc_info = {
-            # Which doesn't exist
-            "startcmd": "/etc/infrasim/startcmd"
-        }
-
-        bmc = model.CBMC(bmc_info)
-        bmc.set_type("quanta_d51")
-        bmc.init()
-
-        try:
-            bmc.precheck()
-        except ArgsNotCorrect, e:
-            assert "startcmd script" in str(e)
-        else:
             assert False
 
     def test_set_startnow_true(self):
@@ -336,7 +337,10 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         with open(bmc.get_config_file(), 'r') as fp:
             if "startnow true" in fp.read():
@@ -351,7 +355,10 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         with open(bmc.get_config_file(), 'r') as fp:
             if "startnow false" in fp.read():
@@ -366,7 +373,10 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         with open(bmc.get_config_file(), 'r') as fp:
             if "poweroff_wait 0" in fp.read():
@@ -381,7 +391,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -397,7 +409,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -413,7 +427,10 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         with open(bmc.get_config_file(), 'r') as fp:
             if "historyfru=11" in fp.read():
@@ -428,7 +445,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -444,7 +463,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -460,7 +481,10 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         with open(bmc.get_config_file(), 'r') as fp:
             if "kill_wait 0" in fp.read():
@@ -475,7 +499,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -491,7 +517,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -508,7 +536,10 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         credential = "user 2 true  \"test_user\" \"test_password\" " \
                      "admin    10       none md2 md5 straight"
@@ -528,7 +559,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
         bmc.precheck()
 
         assert "-f {}".format(fn) in bmc.get_commandline()
@@ -544,7 +577,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -563,7 +598,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
         bmc.precheck()
 
         assert "-c {}".format(fn) in bmc.get_commandline()
@@ -579,7 +616,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.set_config_file(fn)
 
         try:
             bmc.precheck()
@@ -595,7 +634,10 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
+        bmc.precheck()
 
         with open(bmc.get_config_file(), 'r') as fp:
             if "addr :: 624" in fp.read():
@@ -610,7 +652,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -627,7 +671,9 @@ class bmc_configuration(unittest.TestCase):
 
         bmc = model.CBMC(bmc_info)
         bmc.set_type("quanta_d51")
+        bmc.set_workspace(self.__class__.WORKSPACE)
         bmc.init()
+        bmc.write_bmc_config()
 
         try:
             bmc.precheck()
@@ -652,4 +698,4 @@ class socat_configuration(unittest.TestCase):
         cmd = socat_obj.get_commandline()
 
         assert "pty,link=/etc/infrasim/pty0,waitslave" in cmd
-        assert "udp-listen:9003,reuseaddr,fork" in cmd
+        assert "udp-listen:9003,reuseaddr" in cmd

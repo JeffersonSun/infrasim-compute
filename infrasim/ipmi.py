@@ -4,7 +4,7 @@
 import os
 import yaml
 from . import run_command, logger, ArgsNotCorrect, CommandNotFound, CommandRunFailed, VM_DEFAULT_CONFIG
-from model import CBMC
+from model import CBMC, CNode
 
 
 def get_ipmi():
@@ -23,20 +23,29 @@ def status_ipmi():
         print "Infrasim IPMI service is stopped"
 
 
-def start_ipmi(conf=VM_DEFAULT_CONFIG):
+def start_ipmi(conf_file=VM_DEFAULT_CONFIG):
     try:
-        with open(conf, 'r') as f_yml:
+        with open(conf_file, 'r') as f_yml:
             conf = yaml.load(f_yml)
-        if "bmc" in conf:
-            bmc = CBMC(conf["bmc"])
-        else:
-            bmc = CBMC()
+
+        node = CNode(conf)
+        if "name" in conf:
+            node.set_node_name(conf["name"])
+        node.init_workspace()
+
+        bmc = CBMC(conf.get('bmc', {}))
+        node_name = conf["name"] if "name" in conf else "node-0"
+        bmc.set_task_name("{}-bmc".format(node_name))
+        bmc.set_log_path("/var/log/infrasim/{}/openipmi.log".
+                         format(node_name))
         bmc.set_type(conf["type"])
+        bmc.set_workspace(node.workspace)
         bmc.init()
+        bmc.write_bmc_config()
         bmc.precheck()
-        cmd = "{} > /var/log/openipmi.log &".format(bmc.get_commandline())
+        cmd = bmc.get_commandline()
         logger.debug(cmd)
-        run_command(cmd, True, None, None)
+        run_command(cmd+" &", True, None, None)
 
         logger.info("bmc start")
     except CommandRunFailed as e:
@@ -47,7 +56,7 @@ def start_ipmi(conf=VM_DEFAULT_CONFIG):
         raise e
 
 
-def stop_ipmi():
+def stop_ipmi(conf_file=VM_DEFAULT_CONFIG):
     ipmi_stop_cmd = "pkill ipmi_sim"
     try:
         run_command(ipmi_stop_cmd, True, None, None)
