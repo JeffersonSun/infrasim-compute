@@ -34,7 +34,7 @@ Start Infrasim Service
     **sudo infrasim-init**
 
 2. Start Infrasim Service
-    **sudo inframsim-main start**
+    **sudo infrasim-main start**
 
 3. Stop Infrasim Service
     **sudo infrasim-main stop**
